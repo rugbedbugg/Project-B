@@ -27,6 +27,17 @@ SK_SIZ:	mov		rdx, 	16		# struct SOCKADDR_IN size is fixed 16 bytes
 	syscall
 
 
+LISTEN: // Listen call
+	// listen(SOCKFD, BACKLOG)
+	// rdi (SOCKFD) uses FD value from socket call
+	mov 		rdi, 	r12		# Use listening socket
+	mov		rsi, 	4096		# BACKLOG value (old linux => 128, new linux => 4096)
+						# No. of fully est. conns. waiting to be accepted
+						# Excessive no. of conns. => Dropping of connections
+	mov		rax, 	50		# syscall ID for listen call
+	syscall
+
+
 EXIT:	// Server exit syscall
 	mov		rdi, 	0		# code 0 (success)
 	mov 		rax, 	60		# sys_exit
