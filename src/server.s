@@ -1,6 +1,10 @@
 .intel_syntax noprefix
 .global _start
 _start:
+
+#===============================================#
+#		SOCKET CALL (41)		#
+#===============================================#
 SOCK:	// Socket call
 	// socket(AF_INET, SOCK_STREAM, IPPROTO_IP)
 	mov 		rdi, 	2		# AF_INET 	= 2 (defined)
@@ -11,22 +15,28 @@ SOCK:	// Socket call
 	mov		r12, 	rax		# Listening socket 	(r12, r13 => callee-saved register)
 
 
+#===============================================#
+#		BIND CALL (49)			#
+#===============================================#
 BIND:	// Bind call
 	// bind(FD, *SOCKADDR_IN, sizeof(SOCKADDR_IN))
 	// where,
 	// struct SOCKADDR_IN {sa_family, sin_port, sin_addr, sin_zero}
 SK_FD:	mov		rdi, 	r12		# set listening socket [FD (File descriptor) from socket call]
-SK_ADR:	sub 		rsp, 	16		# Reserve 16 bytes for SOCKADDR_IN struct
+SK_ADRb:sub 		rsp, 	16		# Reserve 16 bytes for SOCKADDR_IN struct
 	mov word ptr 	[rsp], 	2		# sa_family = AF_INET = 2		(2 bytes)
 	mov word ptr 	[rsp+2],0x901f		# sin_port = 8080			(2 bytes)
 	mov dword ptr 	[rsp+4],0x0100007f	# sin_addr = INADDR_ANY = 127.0.0.1	(4 bytes)
 	mov qword ptr 	[rsp+8],0		# sin_zero (padding bytes)		(8 bytes)
 	mov 		rsi, 	rsp		# input SOCKADDR_IN struct			Total = 16 bytes
-SK_SIZ:	mov		rdx, 	16		# struct SOCKADDR_IN size is fixed 16 bytes
+SK_LENb:mov		rdx, 	16		# struct SOCKADDR_IN size is fixed 16 bytes
 	mov		rax, 	49		# syscall ID for bind call
 	syscall
 
 
+#===============================================#
+#		LISTEN CALL (50)		#
+#===============================================#
 LISTEN: // Listen call
 	// listen(SOCKFD, BACKLOG)
 	// rdi (SOCKFD) uses FD value from socket call
@@ -38,6 +48,34 @@ LISTEN: // Listen call
 	syscall
 
 
+#===============================================#
+#		ACCEPT CALL (43)		#
+#===============================================#
+ACCEPT: // Accept call
+	// accept(SOCKFD, *SOCKADDR, *sizeof(SOCKADDR))
+	// where,
+	// struct SOCKADDR {sa_family[2 bytes], sa_data[14 bytes]}
+	// NOTE: we need a pointer to the length of SOCKADDR
+	sub		rsp, 	32		# Reserve enough space for *SOCKADDR [16B] + *sizeof(...) [4B]
+SK_LENa:mov dword ptr [rsp+16], 16
+	mov		rdi, 	r12		# Use listening socket [FD (File descriptor) from socket call]
+
+	// TODO: Enable logging
+	// CURRENT: accept(3, NULL, NULL)
+	// 	- NULL#1 => Donot store client IP address		[ 127.0.0.1 | LAN | ?? ]
+	//	- NULL#2 => Donot store client IP address length
+SK_ADRa:xor 		rsi, 	rsi		# SOCKADDR buffer
+	xor		rdx, 	rdx		# pointer to sizeof(SOCKADDR)
+	mov		rax, 	43		# syscall ID for accept call
+	syscall
+	// After this syscall
+	// rax will contain the new client socket FD
+	mov 		r13, 	rax		# Client Socket 	(Callee-saved register)
+
+
+#===============================================#
+#		EXIT CALL (60)			#
+#===============================================#
 EXIT:	// Server exit syscall
 	mov		rdi, 	0		# code 0 (success)
 	mov 		rax, 	60		# sys_exit
