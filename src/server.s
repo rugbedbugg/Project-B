@@ -38,6 +38,28 @@ LISTEN: // Listen call
 	syscall
 
 
+ACCEPT: // Accept call
+	// accept(SOCKFD, *SOCKADDR, *sizeof(SOCKADDR))
+	// where,
+	// struct SOCKADDR {sa_family[2 bytes], sa_data[14 bytes]}
+	// NOTE: we need a pointer to the length of SOCKADDR
+	sub	rsp, 32		# Reserve enough space for *SOCKADDR [16B] + *sizeof(...) [4B]
+SK_SIZ1:mov dword ptr [rsp+16], 16
+	mov	rdi, r12	# Use listening socket [FD (File descriptor) from socket call]
+
+	// TODO: Enable logging
+	// CURRENT: accept(3, NULL, NULL)
+	// 	- NULL#1 => Donot store client IP address		[ 127.0.0.1 | LAN | ?? ]
+	//	- NULL#2 => Donot store client IP address length
+SK_ADR1:xor 	rsi, rsi	# SOCKADDR buffer
+	xor	rdx, rdx	# pointer to sizeof(SOCKADDR)
+	mov	rax, 43		# syscall ID for accept call
+	syscall
+	// After this syscall
+	// rax will contain the new client socket FD
+	mov 	r13, rax	# Client Socket 	(Callee-saved register)
+
+
 EXIT:	// Server exit syscall
 	mov	rdi, 0		# code 0 (success)
 	mov 	rax, 60		# sys_exit
