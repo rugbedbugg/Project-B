@@ -1,5 +1,21 @@
 .intel_syntax noprefix
 .global _start
+
+#===============================================#
+#		HTTP Status Codes		#
+#===============================================#
+.section .rodata
+RESP_200:
+	.ascii	"HTTP/1.1 200 OK\r\n"
+	.ascii	"Content-Length: 3\r\n"
+	.ascii	"Connection: close\r\n"
+	.ascii	"\r\n"
+	.ascii	"OK\n"
+RESP_200_END:
+
+.set 	RESP_200_LEN, 	RESP_200_END - RESP_200
+
+.section .text
 _start:
 
 #===============================================#
@@ -72,6 +88,24 @@ SK_ADRa:xor 		rsi, 	rsi		# SOCKADDR buffer
 	// rax will contain the new client socket FD
 	mov 		r13, 	rax		# Client Socket 	(Callee-saved register)
 
+#===============================================#
+#		WRITE CALL (1)			#
+#===============================================#
+WRITE:	// Send HTTP 200 response to client socket
+	// write(client_fd, response, response_len)
+	mov		rdi,	r13		# client socket fd
+	lea		rsi,	[rip+RESP_200]	# Response buffer
+	mov		rdx, 	RESP_200_LEN	# Response length
+	mov 		rax, 	1		# sys_write
+	syscall
+
+#===============================================#
+#		CLOSE CALL (6)			#
+#===============================================#
+CLOSE:	// Close client syscall
+	mov		rdi, 	r13		# client socket fd
+	mov 		rax, 	3		# sys_close
+	syscall
 
 #===============================================#
 #		EXIT CALL (60)			#
