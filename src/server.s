@@ -56,6 +56,11 @@ RESP_501:
 RESP_501_END:
 ###################
 
+### Header keys
+#==================
+CONTENT_LENGTH_KEY:	.ascii	"Content-Length:"
+###################
+
 ### Currently configured endpoints
 #==================
 PATH_HEALTH:	.ascii	"/health"
@@ -75,6 +80,7 @@ PATH_LOGOUT:	.ascii	"/logout"
 
 ### Endpoints' path lengths
 #==================
+.set 	CONTENT_LENGTH_KEY_LEN,	15
 .set 	PATH_HEALTH_LEN,	7
 .set 	PATH_LOGIN_LEN,		6
 .set 	PATH_FILES_LEN,		6
@@ -207,6 +213,16 @@ HDR_BOUNDARY: // find "\r\n\r\n" delimiter in current request buffer
 
 
 #===============================================#
+#	      Header Parsing			#
+#===============================================#
+HDR_PARSE:	// parse Content-Length (used for POST body validation path)
+	lea		rdi,	[rip+REQ_BUF]	# request buffer start
+	mov		rsi,	r10		# request header end ptr (exclusive)
+	call		PARSE_CONTENT_LENGTH
+	mov		r11,	rax		# store parsed Content-Length (-1 if absent/invalid)
+
+
+#===============================================#
 #		   Routing			#
 #===============================================#
 ROUTE:
@@ -228,6 +244,10 @@ CHECK_LOGIN:
 	call		PATH_EQ_SPACE
 	cmp		rax,	1
 	jne		CHECK_FILES
+	cmp		r15,	2
+	jne		RESP_METHOD_NOT_ALLOWED	# /login currently supports POST only
+	cmp		r11,	0
+	jl		RESP_BAD_REQUEST		# POST /login requires valid Content-Length
 	jmp		RESP_NOT_IMPLEMENTED
 
 CHECK_FILES:
@@ -341,7 +361,90 @@ FIND_HDR_END:
 	mov		rax,	-1
 	ret
 
-# 2. PATH_EQ_SPACE(path_ptr=rdi, literal_ptr=rsi, len=rdx)
+# 2. PARSE_CONTENT_LENGTH(req_start=rdi, hdr_end_ptr=rsi)
+#
+# Returns parsed Content-Length value in rax
+# Returns -1 if header is absent OR malformed
+PARSE_CONTENT_LENGTH:
+	mov		r8,	rdi		# scan pointer
+.PCL_SCAN:
+	cmp		r8,	rsi
+	jae		.PCL_FAIL
+	mov		rdi,	r8
+	mov		rdx,	rsi
+	sub		rdx,	r8
+	lea		rbx,	[rip+CONTENT_LENGTH_KEY]
+	mov		r9,	CONTENT_LENGTH_KEY_LEN
+	cmp		rdx,	r9
+	jb		.PCL_NEXT_LINE
+
+	# compare "Content-Length:"
+	xor		rcx,	rcx
+.PCL_CMP:
+	cmp		rcx,	r9
+	je		.PCL_FOUND
+	mov		al,	byte ptr [r8+rcx]
+	cmp		al,	byte ptr [rbx+rcx]
+	jne		.PCL_NEXT_LINE
+	inc		rcx
+	jmp		.PCL_CMP
+
+.PCL_FOUND:
+	# parse decimal digits after optional spaces
+	lea		r8,	[r8+r9]
+.PCL_SKIP_SP:
+	cmp		r8,	rsi
+	jae		.PCL_FAIL
+	cmp byte ptr [r8], ' '
+	jne		.PCL_DIGITS
+	inc		r8
+	jmp		.PCL_SKIP_SP
+
+.PCL_DIGITS:
+	xor		rax,	rax
+	xor		r10,	r10		# digit count
+.PCL_NUM_LOOP:
+	cmp		r8,	rsi
+	jae		.PCL_DONE
+	mov		bl,	byte ptr [r8]
+	cmp		bl, 13
+	je		.PCL_DONE
+	cmp		bl, '0'
+	jb		.PCL_FAIL
+	cmp		bl, '9'
+	ja		.PCL_FAIL
+	imul		rax,	rax,	10
+	sub		bl,	'0'
+	movzx		rbx,	bl
+	add		rax,	rbx
+	inc		r8
+	inc		r10
+	jmp		.PCL_NUM_LOOP
+
+.PCL_DONE:
+	cmp		r10,	0
+	je		.PCL_FAIL
+	ret
+
+.PCL_NEXT_LINE:
+	# advance to next line by searching '\n'
+.PCL_EOL:
+	cmp		r8,	rsi
+	jae		.PCL_FAIL
+	cmp byte ptr [r8], 10
+	je		.PCL_ADVANCE
+	inc		r8
+	jmp		.PCL_EOL
+
+.PCL_ADVANCE:
+	inc		r8
+	jmp		.PCL_SCAN
+
+.PCL_FAIL:
+	mov		rax,	-1
+	ret
+
+# 3. PATH_EQ_SPACE(path_ptr=rdi, literal_ptr=rsi, len=rdx)
 #
 # Checks whether the request path starts with a specific character 
 # and that it is immediately followed by a space
