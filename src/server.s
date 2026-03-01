@@ -1,100 +1,14 @@
 .intel_syntax noprefix
 .global _start
+.global ACCEPT
 
+.extern	REQ_BUF
+.extern	FIND_HDR_END
+.extern	PARSE_CONTENT_LENGTH
+.extern	ROUTE
 
-
-#===============================================#
-#	 	  Read-Only Data		#
-#===============================================#
-.section .rodata
-
-### HTTP Status Codes
-#==================
-# 1. Status 200: OK
-RESP_200:
-	.ascii	"HTTP/1.1 200 OK\r\n"
-	.ascii	"Content-Length: 3\r\n"
-	.ascii	"Connection: close\r\n"
-	.ascii	"\r\n"
-	.ascii	"OK\n"
-RESP_200_END:
-#==================
-# 2. Status 400: Bad Request
-RESP_400:
-	.ascii	"HTTP/1.1 400 Bad Request\r\n"
-	.ascii	"Content-Length: 12\r\n"
-	.ascii	"Connection: close\r\n"
-	.ascii	"\r\n"
-	.ascii	"Bad Request\n"
-RESP_400_END:
-#==================
-# 3. Status 404: Not Found
-RESP_404:
-	.ascii	"HTTP/1.1 404 Not Found\r\n"
-	.ascii	"Content-Length: 10\r\n"
-	.ascii	"Connection: close\r\n"
-	.ascii	"\r\n"
-	.ascii	"Not Found\n"
-RESP_404_END:
-#==================
-# 4. Status 405: Method Not Allowed
-RESP_405:
-	.ascii	"HTTP/1.1 405 Method Not Allowed\r\n"
-	.ascii	"Content-Length: 19\r\n"
-	.ascii	"Connection: close\r\n"
-	.ascii	"\r\n"
-	.ascii	"Method Not Allowed\n"
-RESP_405_END:
-#==================
-# 5. Status 501: Not implemented
-RESP_501:
-	.ascii	"HTTP/1.1 501 Not Implemented\r\n"
-	.ascii	"Content-Length: 5\r\n"
-	.ascii	"Connection: close\r\n"
-	.ascii	"\r\n"
-	.ascii	"TODO\n"
-RESP_501_END:
-###################
-
-### Header keys
-#==================
-CONTENT_LENGTH_KEY:	.ascii	"Content-Length:"
-###################
-
-### Currently configured endpoints
-#==================
-PATH_HEALTH:	.ascii	"/health"
-PATH_LOGIN:	.ascii	"/login"
-PATH_FILES:	.ascii	"/files"
-PATH_LOGOUT:	.ascii	"/logout"
-###################
-
-### Calculate & store endpoint path length
-#==================
-.set 	RESP_200_LEN,	RESP_200_END - RESP_200
-.set 	RESP_400_LEN,	RESP_400_END - RESP_400
-.set 	RESP_404_LEN,	RESP_404_END - RESP_404
-.set 	RESP_405_LEN,	RESP_405_END - RESP_405
-.set 	RESP_501_LEN,	RESP_501_END - RESP_501
-###################
-
-### Endpoints' path lengths
-#==================
-.set 	CONTENT_LENGTH_KEY_LEN,	15
-.set 	PATH_HEALTH_LEN,	7
-.set 	PATH_LOGIN_LEN,		6
-.set 	PATH_FILES_LEN,		6
-.set 	PATH_LOGOUT_LEN,	7
-###################
-
-#===============================================#
-#		Request Buffer			#
-#===============================================#
-.section .bss
-	.lcomm	REQ_BUF, 4096
-
-
-
+.extern	RESP_BAD_REQUEST
+.extern	RESP_METHOD_NOT_ALLOWED
 
 .section .text
 _start:
@@ -182,7 +96,7 @@ GET_CHECK:
 	jne		POST_CHECK
 	lea		r14,	[rbx+4]		# PATH pointer (after "GET ")
 	mov		r15,	1		# METHOD ID: GET
-	jmp		ROUTE
+	jmp		AFTER_METHOD
 
 POST_CHECK:
 	cmp byte ptr 	[rbx], 		'P'
@@ -203,6 +117,7 @@ POST_CHECK:
 #===============================================#
 #	  HTTP Header Boundary Parsing		#
 #===============================================#
+AFTER_METHOD:
 HDR_BOUNDARY: // find "\r\n\r\n" delimiter in current request buffer
 	lea		rdi,	[rip+REQ_BUF]	# request buffer ptr
 	mov		rsi,	rax		# bytes_read from READ_REQ
@@ -225,85 +140,7 @@ HDR_PARSE:	// parse Content-Length (used for POST body validation path)
 #===============================================#
 #		   Routing			#
 #===============================================#
-ROUTE:
-	// /health => GET only
-	mov		rdi,	r14
-	lea		rsi,	[rip+PATH_HEALTH]
-	mov		rdx,	PATH_HEALTH_LEN
-	call		PATH_EQ_SPACE
-	cmp		rax,	1
-	jne		CHECK_LOGIN
-	cmp		r15,	1
-	jne		RESP_METHOD_NOT_ALLOWED
-	jmp		RESP_OK
-
-CHECK_LOGIN:
-	mov		rdi,	r14
-	lea		rsi,	[rip+PATH_LOGIN]
-	mov		rdx,	PATH_LOGIN_LEN
-	call		PATH_EQ_SPACE
-	cmp		rax,	1
-	jne		CHECK_FILES
-	cmp		r15,	2
-	jne		RESP_METHOD_NOT_ALLOWED	# /login currently supports POST only
-	cmp		r11,	0
-	jl		RESP_BAD_REQUEST		# POST /login requires valid Content-Length
-	jmp		RESP_NOT_IMPLEMENTED
-
-CHECK_FILES:
-	mov		rdi,	r14
-	lea		rsi,	[rip+PATH_FILES]
-	mov		rdx,	PATH_FILES_LEN
-	call		PATH_EQ_SPACE
-	cmp		rax,	1
-	jne		CHECK_LOGOUT
-	jmp		RESP_NOT_IMPLEMENTED
-
-CHECK_LOGOUT:
-	mov		rdi,	r14
-	lea		rsi,	[rip+PATH_LOGOUT]
-	mov		rdx,	PATH_LOGOUT_LEN
-	call		PATH_EQ_SPACE
-	cmp		rax,	1
-	jne		RESP_NOT_FOUND
-	jmp		RESP_NOT_IMPLEMENTED
-
-
-#===============================================#
-#		WRITE CALL (1)			#
-#===============================================#
-RESP_OK:					// What to response if HTTP request is good
-	mov		rdi,	r13
-	lea		rsi,	[rip+RESP_200]
-	mov		rdx,	RESP_200_LEN
-	jmp		WRITE
-
-RESP_BAD_REQUEST:				// What to respond if request format is malformed
-	mov		rdi,	r13
-	lea		rsi,	[rip+RESP_400]
-	mov		rdx,	RESP_400_LEN
-	jmp		WRITE
-
-RESP_NOT_FOUND:					// What to respond if HTTP request method is invalid
-	mov		rdi,	r13
-	lea		rsi,	[rip+RESP_404]
-	mov		rdx,	RESP_404_LEN
-	jmp		WRITE
-
-RESP_METHOD_NOT_ALLOWED:			// What to respond if HTTP request method is not allowed
-	mov		rdi,	r13
-	lea		rsi,	[rip+RESP_405]
-	mov		rdx,	RESP_405_LEN
-	jmp		WRITE
-
-RESP_NOT_IMPLEMENTED:				// What is respond if HTTP request method hasnt been implemented yet
-	mov		rdi,	r13
-	lea		rsi,	[rip+RESP_501]
-	mov		rdx,	RESP_501_LEN
-
-WRITE:	// write(client_fd, response, response_len)
-	mov 		rax,	1		# sys_write
-	syscall
+	jmp		ROUTE
 
 
 #===============================================#
@@ -323,151 +160,3 @@ EXIT:	// Server exit syscall
 	mov		rdi,	0
 	mov 		rax,	60		# sys_exit
 	syscall
-
-
-#===============================================#
-#		     HELPERS			#
-#===============================================#
-# 1. FIND_HDR_END(buf_ptr=rdi, bytes_read=rsi)
-#
-# Scans request bytes for "\r\n\r\n" and returns offset to body start
-# Returns: rax = offset after boundary OR -1 if not found
-FIND_HDR_END:
-	xor		rcx,	rcx
-.FHE_LOOP:
-	cmp		rcx,	rsi
-	jge		.FHE_FAIL
-	cmp		rcx,	rsi
-	jae		.FHE_FAIL
-	cmp byte ptr [rdi+rcx], 13
-	jne		.FHE_NEXT
-	lea		r8,	[rcx+3]
-	cmp		r8,	rsi
-	jae		.FHE_FAIL
-	cmp byte ptr [rdi+rcx+1], 10
-	jne		.FHE_NEXT
-	cmp byte ptr [rdi+rcx+2], 13
-	jne		.FHE_NEXT
-	cmp byte ptr [rdi+rcx+3], 10
-	jne		.FHE_NEXT
-	lea		rax,	[rcx+4]
-	ret
-
-.FHE_NEXT:
-	inc		rcx
-	jmp		.FHE_LOOP
-
-.FHE_FAIL:
-	mov		rax,	-1
-	ret
-
-# 2. PARSE_CONTENT_LENGTH(req_start=rdi, hdr_end_ptr=rsi)
-#
-# Returns parsed Content-Length value in rax
-# Returns -1 if header is absent OR malformed
-PARSE_CONTENT_LENGTH:
-	mov		r8,	rdi		# scan pointer
-.PCL_SCAN:
-	cmp		r8,	rsi
-	jae		.PCL_FAIL
-	mov		rdi,	r8
-	mov		rdx,	rsi
-	sub		rdx,	r8
-	lea		rbx,	[rip+CONTENT_LENGTH_KEY]
-	mov		r9,	CONTENT_LENGTH_KEY_LEN
-	cmp		rdx,	r9
-	jb		.PCL_NEXT_LINE
-
-	# compare "Content-Length:"
-	xor		rcx,	rcx
-.PCL_CMP:
-	cmp		rcx,	r9
-	je		.PCL_FOUND
-	mov		al,	byte ptr [r8+rcx]
-	cmp		al,	byte ptr [rbx+rcx]
-	jne		.PCL_NEXT_LINE
-	inc		rcx
-	jmp		.PCL_CMP
-
-.PCL_FOUND:
-	# parse decimal digits after optional spaces
-	lea		r8,	[r8+r9]
-.PCL_SKIP_SP:
-	cmp		r8,	rsi
-	jae		.PCL_FAIL
-	cmp byte ptr [r8], ' '
-	jne		.PCL_DIGITS
-	inc		r8
-	jmp		.PCL_SKIP_SP
-
-.PCL_DIGITS:
-	xor		rax,	rax
-	xor		r10,	r10		# digit count
-.PCL_NUM_LOOP:
-	cmp		r8,	rsi
-	jae		.PCL_DONE
-	mov		bl,	byte ptr [r8]
-	cmp		bl, 13
-	je		.PCL_DONE
-	cmp		bl, '0'
-	jb		.PCL_FAIL
-	cmp		bl, '9'
-	ja		.PCL_FAIL
-	imul		rax,	rax,	10
-	sub		bl,	'0'
-	movzx		rbx,	bl
-	add		rax,	rbx
-	inc		r8
-	inc		r10
-	jmp		.PCL_NUM_LOOP
-
-.PCL_DONE:
-	cmp		r10,	0
-	je		.PCL_FAIL
-	ret
-
-.PCL_NEXT_LINE:
-	# advance to next line by searching '\n'
-.PCL_EOL:
-	cmp		r8,	rsi
-	jae		.PCL_FAIL
-	cmp byte ptr [r8], 10
-	je		.PCL_ADVANCE
-	inc		r8
-	jmp		.PCL_EOL
-
-.PCL_ADVANCE:
-	inc		r8
-	jmp		.PCL_SCAN
-
-.PCL_FAIL:
-	mov		rax,	-1
-	ret
-
-# 3. PATH_EQ_SPACE(path_ptr=rdi, literal_ptr=rsi, len=rdx)
-#
-# Checks whether the request path starts with a specific character 
-# and that it is immediately followed by a space
-#
-# Returns: rax = 1 (match) OR 0 (no match)
-PATH_EQ_SPACE:
-	xor		rcx,	rcx
-.PEQ_LOOP:
-	cmp		rcx,	rdx
-	je		.PEQ_TERM
-	mov		r8b,	byte ptr [rdi+rcx]
-	mov		r9b,	byte ptr [rsi+rcx]
-	cmp		r8b,	r9b
-	jne		.PEQ_NO
-	inc		rcx
-	jmp		.PEQ_LOOP
-
-.PEQ_TERM:
-	cmp byte ptr [rdi+rdx], ' '
-	jne		.PEQ_NO
-	mov		rax,	1
-	ret
-
-.PEQ_NO:
-	xor		rax,	rax
-	ret
