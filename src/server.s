@@ -1,10 +1,16 @@
 .intel_syntax noprefix
 .global _start
 
+
+
 #===============================================#
-#		HTTP Status Codes		#
+#	 	  Read-Only Data		#
 #===============================================#
 .section .rodata
+
+### HTTP Status Codes
+#==================
+# 1. Status 200: OK
 RESP_200:
 	.ascii	"HTTP/1.1 200 OK\r\n"
 	.ascii	"Content-Length: 3\r\n"
@@ -12,106 +18,292 @@ RESP_200:
 	.ascii	"\r\n"
 	.ascii	"OK\n"
 RESP_200_END:
+#==================
+# 2. Status 404: Not Found
+RESP_404:
+	.ascii	"HTTP/1.1 404 Not Found\r\n"
+	.ascii	"Content-Length: 10\r\n"
+	.ascii	"Connection: close\r\n"
+	.ascii	"\r\n"
+	.ascii	"Not Found\n"
+RESP_404_END:
+#==================
+# 3. Status 405: Method Not Allowed
+RESP_405:
+	.ascii	"HTTP/1.1 405 Method Not Allowed\r\n"
+	.ascii	"Content-Length: 19\r\n"
+	.ascii	"Connection: close\r\n"
+	.ascii	"\r\n"
+	.ascii	"Method Not Allowed\n"
+RESP_405_END:
+#==================
+# 4. Status 501: Not implemented
+RESP_501:
+	.ascii	"HTTP/1.1 501 Not Implemented\r\n"
+	.ascii	"Content-Length: 5\r\n"
+	.ascii	"Connection: close\r\n"
+	.ascii	"\r\n"
+	.ascii	"TODO\n"
+RESP_501_END:
+###################
 
-.set 	RESP_200_LEN, 	RESP_200_END - RESP_200
+### Currently configured endpoints
+#==================
+PATH_HEALTH:	.ascii	"/health"
+PATH_LOGIN:	.ascii	"/login"
+PATH_FILES:	.ascii	"/files"
+PATH_LOGOUT:	.ascii	"/logout"
+###################
+
+### Calculate & store endpoint path length
+#==================
+.set 	RESP_200_LEN,	RESP_200_END - RESP_200
+.set 	RESP_404_LEN,	RESP_404_END - RESP_404
+.set 	RESP_405_LEN,	RESP_405_END - RESP_405
+.set 	RESP_501_LEN,	RESP_501_END - RESP_501
+###################
+
+### Endpoints' path lengths
+#==================
+.set 	PATH_HEALTH_LEN,	7
+.set 	PATH_LOGIN_LEN,		6
+.set 	PATH_FILES_LEN,		6
+.set 	PATH_LOGOUT_LEN,	7
+###################
+
+#===============================================#
+#		Request Buffer			#
+#===============================================#
+.section .bss
+	.lcomm	REQ_BUF, 4096
+
+
+
 
 .section .text
 _start:
-
 #===============================================#
 #		SOCKET CALL (41)		#
 #===============================================#
-SOCK:	// Socket call
-	// socket(AF_INET, SOCK_STREAM, IPPROTO_IP)
-	mov 		rdi, 	2		# AF_INET 	= 2 (defined)
-	mov 		rsi, 	1		# SOCK_STREAM 	= 1 (widely used default)
-	mov 		rdx, 	0		# IPPROTO_IP 	= 0 (common default)
-	mov 		rax, 	41		# syscall ID for socket call
+SOCK:	// socket(AF_INET, SOCK_STREAM, IPPROTO_IP)
+	mov 		rdi,	2		# AF_INET
+	mov 		rsi,	1		# SOCK_STREAM
+	mov 		rdx,	0		# IPPROTO_IP
+	mov 		rax,	41		# sys_socket
 	syscall
-	mov		r12, 	rax		# Listening socket 	(r12, r13 => callee-saved register)
+	mov		r12,	rax		# Listening socket FD
 
 
 #===============================================#
 #		BIND CALL (49)			#
 #===============================================#
-BIND:	// Bind call
-	// bind(FD, *SOCKADDR_IN, sizeof(SOCKADDR_IN))
-	// where,
-	// struct SOCKADDR_IN {sa_family, sin_port, sin_addr, sin_zero}
-SK_FD:	mov		rdi, 	r12		# set listening socket [FD (File descriptor) from socket call]
-SK_ADRb:sub 		rsp, 	16		# Reserve 16 bytes for SOCKADDR_IN struct
-	mov word ptr 	[rsp], 	2		# sa_family = AF_INET = 2		(2 bytes)
-	mov word ptr 	[rsp+2],0x901f		# sin_port = 8080			(2 bytes)
-	mov dword ptr 	[rsp+4],0x0100007f	# sin_addr = INADDR_ANY = 127.0.0.1	(4 bytes)
-	mov qword ptr 	[rsp+8],0		# sin_zero (padding bytes)		(8 bytes)
-	mov 		rsi, 	rsp		# input SOCKADDR_IN struct			Total = 16 bytes
-SK_LENb:mov		rdx, 	16		# struct SOCKADDR_IN size is fixed 16 bytes
-	mov		rax, 	49		# syscall ID for bind call
+BIND:	// bind(FD, *SOCKADDR_IN, sizeof(SOCKADDR_IN))
+SK_FD:	mov		rdi,	r12		# Listening socket FD
+SK_ADRb:	sub 		rsp,	16		# Reserve SOCKADDR_IN (16B)
+	mov word ptr 	[rsp],	2		# AF_INET
+	mov word ptr 	[rsp+2],0x901f		# sin_port = 8080
+	mov dword ptr 	[rsp+4],0x00000000	# sin_addr = 0.0.0.0 (INADDR_ANY)
+	mov qword ptr 	[rsp+8],0		# sin_zero
+	mov 		rsi,	rsp		# *SOCKADDR_IN
+SK_LENb:mov		rdx,	16		# sizeof(SOCKADDR_IN)
+	mov		rax,	49		# sys_bind
 	syscall
 
 
 #===============================================#
 #		LISTEN CALL (50)		#
 #===============================================#
-LISTEN: // Listen call
-	// listen(SOCKFD, BACKLOG)
-	// rdi (SOCKFD) uses FD value from socket call
-	mov 		rdi, 	r12		# Use listening socket
-	mov		rsi, 	4096		# BACKLOG value (old linux => 128, new linux => 4096)
-						# No. of fully est. conns. waiting to be accepted
-						# Excessive no. of conns. => Dropping of connections
-	mov		rax, 	50		# syscall ID for listen call
+LISTEN:	// listen(SOCKFD, BACKLOG)
+	mov 		rdi,	r12		# Listening socket FD
+	mov		rsi,	4096		# BACKLOG
+	mov		rax,	50		# sys_listen
 	syscall
 
 
 #===============================================#
 #		ACCEPT CALL (43)		#
 #===============================================#
-ACCEPT: // Accept call
-	// accept(SOCKFD, *SOCKADDR, *sizeof(SOCKADDR))
-	// where,
-	// struct SOCKADDR {sa_family[2 bytes], sa_data[14 bytes]}
-	// NOTE: we need a pointer to the length of SOCKADDR
-	sub		rsp, 	32		# Reserve enough space for *SOCKADDR [16B] + *sizeof(...) [4B]
+ACCEPT:	// accept(SOCKFD, NULL, NULL)
+	sub		rsp,	32		# keep stack room style-consistent with previous layout
 SK_LENa:mov dword ptr [rsp+16], 16
-	mov		rdi, 	r12		# Use listening socket [FD (File descriptor) from socket call]
-
-	// TODO: Enable logging
-	// CURRENT: accept(3, NULL, NULL)
-	// 	- NULL#1 => Donot store client IP address		[ 127.0.0.1 | LAN | ?? ]
-	//	- NULL#2 => Donot store client IP address length
-SK_ADRa:xor 		rsi, 	rsi		# SOCKADDR buffer
-	xor		rdx, 	rdx		# pointer to sizeof(SOCKADDR)
-	mov		rax, 	43		# syscall ID for accept call
+	mov		rdi,	r12		# Listening socket FD
+SK_ADRa:xor 		rsi,	rsi		# NULL SOCKADDR
+	xor		rdx,	rdx		# NULL SOCKADDR length ptr
+	mov		rax,	43		# sys_accept
 	syscall
-	// After this syscall
-	// rax will contain the new client socket FD
-	mov 		r13, 	rax		# Client Socket 	(Callee-saved register)
+	cmp		rax,	0
+	jl		ACCEPT			# if accept fails, retry
+	mov 		r13,	rax		# Client socket FD
+
+
+#===============================================#
+#		READ CALL (0)			#
+#===============================================#
+READ_REQ:	// read(client_fd, REQ_BUF, 4096)
+	mov		rdi,	r13
+	lea		rsi,	[rip+REQ_BUF]
+	mov		rdx,	4096
+	mov		rax,	0		# sys_read
+	syscall
+	cmp		rax,	0
+	jle		CLOSE			# closed/error => close client, continue accept loop
+
+
+#===============================================#
+#	     	Request Parsing			#
+#===============================================#
+PARSE:	// parse METHOD + PATH from request line
+	lea		rbx,	[rip+REQ_BUF]
+
+GET_CHECK:
+	cmp byte ptr 	[rbx], 		'G'
+	jne		POST_CHECK
+	cmp byte ptr 	[rbx+1], 	'E'
+	jne		POST_CHECK
+	cmp byte ptr 	[rbx+2], 	'T'
+	jne		POST_CHECK
+	cmp byte ptr [rbx+3], 		' '
+	jne		POST_CHECK
+	lea		r14,	[rbx+4]		# PATH pointer (after "GET ")
+	mov		r15,	1		# METHOD ID: GET
+	jmp		ROUTE
+
+POST_CHECK:
+	cmp byte ptr 	[rbx], 		'P'
+	jne		RESP_METHOD_NOT_ALLOWED
+	cmp byte ptr 	[rbx+1], 	'O'
+	jne		RESP_METHOD_NOT_ALLOWED
+	cmp byte ptr 	[rbx+2], 	'S'
+	jne		RESP_METHOD_NOT_ALLOWED
+	cmp byte ptr 	[rbx+3], 	'T'
+	jne		RESP_METHOD_NOT_ALLOWED
+	cmp byte ptr 	[rbx+4], 	' '
+	jne		RESP_METHOD_NOT_ALLOWED	# Check for "POST " in the HTTP request, if not, return
+
+	lea		r14,	[rbx+5]		# PATH pointer (after "POST ")
+	mov		r15,	2		# METHOD ID: POST
+
+
+#===============================================#
+#		   Routing			#
+#===============================================#
+ROUTE:
+	// /health => GET only
+	mov		rdi,	r14
+	lea		rsi,	[rip+PATH_HEALTH]
+	mov		rdx,	PATH_HEALTH_LEN
+	call		PATH_EQ_SPACE
+	cmp		rax,	1
+	jne		CHECK_LOGIN
+	cmp		r15,	1
+	jne		RESP_METHOD_NOT_ALLOWED
+	jmp		RESP_OK
+
+CHECK_LOGIN:
+	mov		rdi,	r14
+	lea		rsi,	[rip+PATH_LOGIN]
+	mov		rdx,	PATH_LOGIN_LEN
+	call		PATH_EQ_SPACE
+	cmp		rax,	1
+	jne		CHECK_FILES
+	jmp		RESP_NOT_IMPLEMENTED
+
+CHECK_FILES:
+	mov		rdi,	r14
+	lea		rsi,	[rip+PATH_FILES]
+	mov		rdx,	PATH_FILES_LEN
+	call		PATH_EQ_SPACE
+	cmp		rax,	1
+	jne		CHECK_LOGOUT
+	jmp		RESP_NOT_IMPLEMENTED
+
+CHECK_LOGOUT:
+	mov		rdi,	r14
+	lea		rsi,	[rip+PATH_LOGOUT]
+	mov		rdx,	PATH_LOGOUT_LEN
+	call		PATH_EQ_SPACE
+	cmp		rax,	1
+	jne		RESP_NOT_FOUND
+	jmp		RESP_NOT_IMPLEMENTED
+
 
 #===============================================#
 #		WRITE CALL (1)			#
 #===============================================#
-WRITE:	// Send HTTP 200 response to client socket
-	// write(client_fd, response, response_len)
-	mov		rdi,	r13		# client socket fd
-	lea		rsi,	[rip+RESP_200]	# Response buffer
-	mov		rdx, 	RESP_200_LEN	# Response length
-	mov 		rax, 	1		# sys_write
+RESP_OK:					// What to response if HTTP request is good
+	mov		rdi,	r13
+	lea		rsi,	[rip+RESP_200]
+	mov		rdx,	RESP_200_LEN
+	jmp		WRITE
+
+RESP_NOT_FOUND:					// What to respond if HTTP request method is invalid
+	mov		rdi,	r13
+	lea		rsi,	[rip+RESP_404]
+	mov		rdx,	RESP_404_LEN
+	jmp		WRITE
+
+RESP_METHOD_NOT_ALLOWED:			// What to respond if HTTP request method is not allowed
+	mov		rdi,	r13
+	lea		rsi,	[rip+RESP_405]
+	mov		rdx,	RESP_405_LEN
+	jmp		WRITE
+
+RESP_NOT_IMPLEMENTED:				// What is respond if HTTP request method hasnt been implemented yet
+	mov		rdi,	r13
+	lea		rsi,	[rip+RESP_501]
+	mov		rdx,	RESP_501_LEN
+
+WRITE:	// write(client_fd, response, response_len)
+	mov 		rax,	1		# sys_write
 	syscall
-	jmp		ACCEPT			# loop forever: accept next connection
+
 
 #===============================================#
-#		CLOSE CALL (6)			#
+#		CLOSE CALL (3)			#
 #===============================================#
-CLOSE:	// Close client syscall
-	mov		rdi, 	r13		# client socket fd
-	mov 		rax, 	3		# sys_close
+CLOSE:	// close(client_fd)
+	mov		rdi,	r13
+	mov 		rax,	3		# sys_close
 	syscall
+	jmp		ACCEPT			# loop forever
+
 
 #===============================================#
 #		EXIT CALL (60)			#
 #===============================================#
 EXIT:	// Server exit syscall
-	mov		rdi, 	0		# code 0 (success)
-	mov 		rax, 	60		# sys_exit
+	mov		rdi,	0
+	mov 		rax,	60		# sys_exit
 	syscall
+
+
+#===============================================#
+#		     HELPERS			#
+#===============================================#
+# PATH_EQ_SPACE(path_ptr=rdi, literal_ptr=rsi, len=rdx)
+#
+# Checks whether the request path starts with a specific character 
+# and that it is immediately followed by a space
+#
+# Returns: rax = 1 (match) OR 0 (no match)
+PATH_EQ_SPACE:
+	xor		rcx,	rcx
+.PEQ_LOOP:
+	cmp		rcx,	rdx
+	je		.PEQ_TERM
+	mov		r8b,	byte ptr [rdi+rcx]
+	mov		r9b,	byte ptr [rsi+rcx]
+	cmp		r8b,	r9b
+	jne		.PEQ_NO
+	inc		rcx
+	jmp		.PEQ_LOOP
+
+.PEQ_TERM:
+	cmp byte ptr [rdi+rdx], ' '
+	jne		.PEQ_NO
+	mov		rax,	1
+	ret
+
+.PEQ_NO:
+	xor		rax,	rax
+	ret
