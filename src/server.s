@@ -1,6 +1,7 @@
 .intel_syntax noprefix
 .global _start
 .global ACCEPT
+.global REQ_BYTES
 
 .extern	REQ_BUF
 .extern	FIND_HDR_END
@@ -9,6 +10,9 @@
 
 .extern	RESP_BAD_REQUEST
 .extern	RESP_METHOD_NOT_ALLOWED
+
+.section .bss
+	.lcomm	REQ_BYTES, 8
 
 .section .text
 _start:
@@ -54,13 +58,13 @@ LISTEN:	// listen(SOCKFD, BACKLOG)
 #		ACCEPT CALL (43)		#
 #===============================================#
 ACCEPT:	// accept(SOCKFD, NULL, NULL)
-	sub		rsp,	32		# keep stack room style-consistent with previous layout
-SK_LENa:mov dword ptr [rsp+16], 16
+	# NOTE: using NULL/NULL so no stack reservation is required here
 	mov		rdi,	r12		# Listening socket FD
 SK_ADRa:xor 		rsi,	rsi		# NULL SOCKADDR
 	xor		rdx,	rdx		# NULL SOCKADDR length ptr
 	mov		rax,	43		# sys_accept
 	syscall
+	mov		qword ptr [rip+REQ_BYTES],	rax
 	cmp		rax,	0
 	jl		ACCEPT			# if accept fails, retry
 	mov 		r13,	rax		# Client socket FD
@@ -75,6 +79,7 @@ READ_REQ:	// read(client_fd, REQ_BUF, 4096)
 	mov		rdx,	4096
 	mov		rax,	0		# sys_read
 	syscall
+	mov		qword ptr [rip+REQ_BYTES],	rax
 	cmp		rax,	0
 	jle		CLOSE			# closed/error => close client, continue accept loop
 

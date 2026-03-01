@@ -4,6 +4,7 @@
 .global	FIND_HDR_END
 .global	PARSE_CONTENT_LENGTH
 .global	PATH_EQ_SPACE
+.global	FORM_HAS_VALUE
 
 .section .rodata
 CONTENT_LENGTH_KEY:	.ascii	"Content-Length:"
@@ -134,7 +135,60 @@ PARSE_CONTENT_LENGTH:
 	mov		rax,	-1
 	ret
 
-# 3. PATH_EQ_SPACE(path_ptr=rdi, literal_ptr=rsi, len=rdx)
+
+# 4. FORM_HAS_VALUE(body_ptr=rdi, body_len=rsi, key_ptr=rdx, key_len=rcx)
+#
+# Finds key pattern in form body and verifies there is at least one value byte
+# Returns: rax = 1 (found with non-empty value) OR 0 (missing/empty)
+FORM_HAS_VALUE:
+	xor		r8,	r8		# start index in body
+.FHV_SCAN:
+	cmp		r8,	rsi
+	jae		.FHV_NO
+
+	# ensure enough remaining bytes for key comparison
+	mov		r9,	rsi
+	sub		r9,	r8
+	cmp		r9,	rcx
+	jb		.FHV_NO
+
+	# compare key bytes from body[r8 + i] with key[i]
+	xor		r10,	r10
+.FHV_CMP:
+	cmp		r10,	rcx
+	je		.FHV_KEY_MATCH
+	lea		rax,	[rdi+r8]
+	mov		r11b,	byte ptr [rax+r10]
+	cmp		r11b,	byte ptr [rdx+r10]
+	jne		.FHV_NEXT
+	inc		r10
+	jmp		.FHV_CMP
+
+.FHV_KEY_MATCH:
+	# check first value byte exists and is not '&' / CR / LF
+	lea		rax,	[r8+rcx]
+	cmp		rax,	rsi
+	jae		.FHV_NO
+	lea		r9,	[rdi+rax]
+	mov		r11b,	byte ptr [r9]
+	cmp		r11b,	'&'
+	je		.FHV_NO
+	cmp		r11b,	13
+	je		.FHV_NO
+	cmp		r11b,	10
+	je		.FHV_NO
+	mov		rax,	1
+	ret
+
+.FHV_NEXT:
+	inc		r8
+	jmp		.FHV_SCAN
+
+.FHV_NO:
+	xor		rax,	rax
+	ret
+
+# 5. PATH_EQ_SPACE(path_ptr=rdi, literal_ptr=rsi, len=rdx)
 #
 # Checks whether the request path starts with a specific character
 # and that it is immediately followed by a space
